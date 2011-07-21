@@ -23,6 +23,14 @@ public class MongoDBFactory {
         synchronized (mongoDbFactoryMap) {
             DB db = mongoDbFactoryMap.get(hosts);
 
+            // Re-initiate a new connection if its not authenticated for some reason
+            if (db != null && !db.isAuthenticated()) {
+                log.debug("Re-initiating mongo db connection!");
+                db.getMongo().close();
+                mongoDbFactoryMap.remove(hosts);
+                db = null;
+            }
+
             if (db == null) {
                 log.debug("Initiating a new mongo connection!");
                 Mongo connection = new Mongo(hosts);
