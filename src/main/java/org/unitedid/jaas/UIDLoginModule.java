@@ -14,6 +14,7 @@ import javax.security.auth.callback.*;
 import javax.security.auth.login.FailedLoginException;
 import javax.security.auth.login.LoginException;
 import javax.security.auth.spi.LoginModule;
+import java.awt.*;
 import java.io.IOException;
 import java.net.UnknownHostException;
 import java.util.ArrayList;
@@ -91,14 +92,18 @@ public class UIDLoginModule implements LoginModule {
         // Fetch mongo object from factory
         DB db = MongoDBFactory.get(mongoHosts, mongoDb, mongoUser, mongoPassword);
         DBCollection collection = db.getCollection(mongoCollection);
+
         BasicDBObject query = new BasicDBObject();
         query.put("username", username);
+
         DBObject result = collection.findOne(query);
         if (result == null) {
-            throw new FailedLoginException("No such user: " + username);
+            throw new FailedLoginException("User not found: " + username);
+        } else if (!(Boolean) result.get("active")) {
+            throw new FailedLoginException("User not activated: " + username);
         }
 
-        String hashedPassword = PasswordUtil.getHashFromPassword(pass.toString(), username, pbkdf2Iterations, pbkdf2Length);
+        String hashedPassword = PasswordUtil.getHashFromPassword(pass.toString(), (String) result.get("salt"), pbkdf2Iterations, pbkdf2Length);
         pass.clearPassword();
         String aead = (String) result.get("password");
         String nonce = (String) result.get("nonce");
@@ -114,7 +119,8 @@ public class UIDLoginModule implements LoginModule {
         } catch (YubiHSMCommandFailedException e) {
             throw new RuntimeException(e);
         } catch (YubiHSMInputException e) {
-            throw new RuntimeException(e);
+            // This exception indicate that the password is wrong because the expected length of aead and password are wrong
+            throw new FailedLoginException("AEAD validation failed for user: " + username);
         }
 
         user = new UIDPrincipal(username);
