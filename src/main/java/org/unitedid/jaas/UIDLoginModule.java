@@ -4,18 +4,16 @@ import com.mongodb.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.unitedid.utils.PasswordUtil;
-import org.unitedid.yhsm.YubiHSM;
-import org.unitedid.yhsm.internal.YubiHSMCommandFailedException;
-import org.unitedid.yhsm.internal.YubiHSMErrorException;
-import org.unitedid.yhsm.internal.YubiHSMInputException;
+import org.unitedid.yhsm.ws.YubiHSMErrorException_Exception;
+import org.unitedid.yhsm.ws.client.YubiHSMValidationClient;
 
 import javax.security.auth.Subject;
 import javax.security.auth.callback.*;
 import javax.security.auth.login.FailedLoginException;
 import javax.security.auth.login.LoginException;
 import javax.security.auth.spi.LoginModule;
-import java.awt.*;
 import java.io.IOException;
+import java.io.UnsupportedEncodingException;
 import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.List;
@@ -45,11 +43,11 @@ public class UIDLoginModule implements LoginModule {
     private int pbkdf2Iterations = 0;
     private int pbkdf2Length = 0;
 
-    private String yubiHSMDevice = null;
+    private String wsdlValidationURL;
     private int yubiHSMKeyHandle = 0;
 
     private Subject subject;
-    private Map<String, ?> sharedState;
+    private Map<String, Object> sharedState;
     private CallbackHandler callbackHandler;
 
     private String username;
@@ -59,7 +57,7 @@ public class UIDLoginModule implements LoginModule {
         log.debug("Initializing UIDLoginModule.");
 
         this.subject = subject;
-        this.sharedState = sharedState;
+        this.sharedState = (Map<String, Object>) sharedState;
         this.callbackHandler = callbackHandler;
 
         String mongoHosts = getOption(options, "mongoHosts");
@@ -77,8 +75,8 @@ public class UIDLoginModule implements LoginModule {
         mongoPassword = getOption(options, "mongoPassword");
         pbkdf2Iterations = Integer.parseInt(getOption(options, "pbkdf2Iterations"));
         pbkdf2Length = Integer.parseInt(getOption(options, "pbkdf2Length"));
-        yubiHSMDevice = getOption(options, "yubiHSMDevice");
         yubiHSMKeyHandle = Integer.parseInt(getOption(options, "yubiHSMKeyHandle"));
+        wsdlValidationURL = getOption(options, "wsdlValidationURL");
     }
 
     public boolean login() throws LoginException {
@@ -103,27 +101,30 @@ public class UIDLoginModule implements LoginModule {
             throw new FailedLoginException("User not activated: " + username);
         }
 
-        String hashedPassword = PasswordUtil.getHashFromPassword(pass.toString(), (String) result.get("salt"), pbkdf2Iterations, pbkdf2Length);
-        pass.clearPassword();
         String aead = (String) result.get("password");
         String nonce = (String) result.get("nonce");
+        String salt = (String) result.get("salt");
+        String hashedPassword = PasswordUtil.getHashFromPassword(pass.toString(), salt, pbkdf2Iterations, pbkdf2Length);
+        pass.clearPassword();
 
         try {
-            // YubiHSM
-            YubiHSM hsm = new YubiHSM(yubiHSMDevice, 1);
-            if (!hsm.validateAEAD(nonce, yubiHSMKeyHandle, aead, hashedPassword)) {
+            YubiHSMValidationClient hsm = new YubiHSMValidationClient(wsdlValidationURL);
+            if(!hsm.validateAEAD(nonce, yubiHSMKeyHandle, aead, hashedPassword)) {
                 throw new FailedLoginException("AEAD validation failed for user: " + username);
             }
-        } catch (YubiHSMErrorException e) {
+        } catch (YubiHSMErrorException_Exception e) {
             throw new RuntimeException(e);
-        } catch (YubiHSMCommandFailedException e) {
+        } catch (UnsupportedEncodingException e) {
             throw new RuntimeException(e);
-        } catch (YubiHSMInputException e) {
-            // This exception indicate that the password is wrong because the expected length of aead and password are wrong
-            throw new FailedLoginException("AEAD validation failed for user: " + username);
+        }
+
+        // Get available tokens and pass them on to the next JAAS module through sharedState
+        if (result.containsField("tokens") ) {
+            sharedState.put("tokens", (List<DBObject>) result.get("tokens"));
         }
 
         user = new UIDPrincipal(username);
+        sharedState.put(LOGIN_NAME, username);
         succeeded = true;
         return true;
     }
@@ -188,6 +189,7 @@ public class UIDLoginModule implements LoginModule {
         subject = null;
         callbackHandler = null;
         username = null;
+        sharedState = null;
     }
 
     private String getOption(Map<String, ?> options, String key) {

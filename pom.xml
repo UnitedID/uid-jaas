@@ -5,7 +5,7 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>org.unitedid</groupId>
     <artifactId>uid-jaas</artifactId>
-    <version>1.0</version>
+    <version>1.2</version>
     <inceptionYear>2011</inceptionYear>
     <organization>
       <name>United ID</name>
@@ -49,9 +49,8 @@
         </dependency>
         <dependency>
             <groupId>org.unitedid</groupId>
-            <artifactId>YubiHSM</artifactId>
-            <version>0.1-alpha</version>
-            <scope>provided</scope>
+            <artifactId>YubiHSM-java-validation-client</artifactId>
+            <version>0.1</version>
         </dependency>
     </dependencies>
 
