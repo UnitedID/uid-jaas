@@ -86,7 +86,7 @@ public class UIDLoginModule implements LoginModule {
         getCredentials(nameCallback, passwordCallback, true);
         Password pass = new Password(passwordCallback.getPassword());
         passwordCallback.clearPassword();
-        username = nameCallback.getName();
+        username = nameCallback.getName().toLowerCase();
 
         // Fetch mongo object from factory
         DB db = MongoDBFactory.get(mongoHosts, mongoDb, mongoUser, mongoPassword);
