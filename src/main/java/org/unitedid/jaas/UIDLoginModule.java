@@ -3,6 +3,7 @@ package org.unitedid.jaas;
 import com.mongodb.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.unitedid.utils.ConfigUtil;
 import org.unitedid.utils.PasswordUtil;
 import org.unitedid.yhsm.ws.YubiHSMErrorException_Exception;
 import org.unitedid.yhsm.ws.client.YubiHSMValidationClient;
@@ -60,7 +61,7 @@ public class UIDLoginModule implements LoginModule {
         this.sharedState = (Map<String, Object>) sharedState;
         this.callbackHandler = callbackHandler;
 
-        String mongoHosts = getOption(options, "mongoHosts");
+        String mongoHosts = ConfigUtil.getOption(options, "mongoHosts");
         for (String host : mongoHosts.split(",")) {
             try {
                 this.mongoHosts.add(new ServerAddress(host));
@@ -69,14 +70,14 @@ public class UIDLoginModule implements LoginModule {
             }
         }
 
-        mongoDb = getOption(options, "mongoDb");
-        mongoCollection = getOption(options, "mongoCollection");
-        mongoUser = getOption(options, "mongoUser");
-        mongoPassword = getOption(options, "mongoPassword");
-        pbkdf2Iterations = Integer.parseInt(getOption(options, "pbkdf2Iterations"));
-        pbkdf2Length = Integer.parseInt(getOption(options, "pbkdf2Length"));
-        yubiHSMKeyHandle = Integer.parseInt(getOption(options, "yubiHSMKeyHandle"));
-        wsdlValidationURL = getOption(options, "wsdlValidationURL");
+        mongoDb = ConfigUtil.getOption(options, "mongoDb");
+        mongoCollection = ConfigUtil.getOption(options, "mongoCollection");
+        mongoUser = ConfigUtil.getOption(options, "mongoUser");
+        mongoPassword = ConfigUtil.getOption(options, "mongoPassword");
+        pbkdf2Iterations = Integer.parseInt(ConfigUtil.getOption(options, "pbkdf2Iterations"));
+        pbkdf2Length = Integer.parseInt(ConfigUtil.getOption(options, "pbkdf2Length"));
+        yubiHSMKeyHandle = Integer.parseInt(ConfigUtil.getOption(options, "yubiHSMKeyHandle"));
+        wsdlValidationURL = ConfigUtil.getOption(options, "wsdlValidationURL");
     }
 
     public boolean login() throws LoginException {
@@ -91,8 +92,11 @@ public class UIDLoginModule implements LoginModule {
         DB db = MongoDBFactory.get(mongoHosts, mongoDb, mongoUser, mongoPassword);
         DBCollection collection = db.getCollection(mongoCollection);
 
-        BasicDBObject query = new BasicDBObject();
-        query.put("username", username);
+        // Query username or email address since we don't know which one was used
+        DBObject query = QueryBuilder.start().or(
+                new BasicDBObject("username", username),
+                new BasicDBObject("mail", username),
+                new BasicDBObject("mailAlias", username)).get();
 
         DBObject result = collection.findOne(query);
         if (result == null) {
@@ -179,9 +183,8 @@ public class UIDLoginModule implements LoginModule {
         commitSucceeded = false;
         user = null;
 
-        if (log.isDebugEnabled()) {
-            log.debug("Subject is being logged out");
-        }
+        log.debug("Subject is being logged out");
+
         return true;
     }
 
@@ -190,15 +193,6 @@ public class UIDLoginModule implements LoginModule {
         callbackHandler = null;
         username = null;
         sharedState = null;
-    }
-
-    private String getOption(Map<String, ?> options, String key) {
-        String option = null;
-        option = (String) options.get(key);
-        if (option == null)
-            throw new IllegalArgumentException("Missing argument " + key);
-
-        return option;
     }
 
     protected void getCredentials(NameCallback nameCallback, PasswordCallback passwordCallback, boolean useCallback) throws LoginException {
