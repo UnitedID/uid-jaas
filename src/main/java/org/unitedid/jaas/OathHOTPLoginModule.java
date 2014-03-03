@@ -48,6 +48,7 @@ public class OathHOTPLoginModule implements LoginModule {
     private String mongoCollection = null;
     private String mongoUser = null;
     private String mongoPassword = null;
+    private String mongoReadPref = "primary";
 
 
     public void initialize(Subject subject, CallbackHandler callbackHandler, Map<String, ?> sharedState, Map<String, ?> options) {
@@ -81,6 +82,9 @@ public class OathHOTPLoginModule implements LoginModule {
         mongoCollection = ConfigUtil.getOption(options, "mongoCollection");
         mongoUser = ConfigUtil.getOption(options, "mongoUser");
         mongoPassword = ConfigUtil.getOption(options, "mongoPassword");
+        if (options.get("mongoReadPref") != null) {
+            mongoReadPref = ConfigUtil.getOption(options, "mongoReadPref");
+        }
     }
 
     public boolean login() throws LoginException {
@@ -163,8 +167,7 @@ public class OathHOTPLoginModule implements LoginModule {
         log.debug("sharedState keys: {}", sharedState.keySet().toString());
         /* We need to iterate over all otps and all tokens found in sharedState */
         if (sharedState.containsKey("tokens")) {
-            @SuppressWarnings("unchecked")
-            List<DBObject> tokens = (List<DBObject>) sharedState.get("tokens");
+            List<Map<String, Object>> tokens = (List<Map<String, Object>>) sharedState.get("tokens");
 
             log.debug("Processing token list, found {} entries", tokens.size());
 
@@ -185,10 +188,10 @@ public class OathHOTPLoginModule implements LoginModule {
         return validated;
     }
 
-    private boolean validateOathHOTP(List<DBObject> tokens, String otp) {
-        for (DBObject token : tokens) {
+    private boolean validateOathHOTP(List<Map<String, Object>> tokens, String otp) {
+        for (Map<String, Object> token : tokens) {
             if ((token.get("type").equals("oathhotp") || token.get("type").equals("googlehotp")) && token.get("active").equals(true)) {
-                int newCounter = 0;
+                int newCounter;
                 String tokenId = (String) token.get("tokId");
                 String nonce = (String) token.get("nonce");
                 String aead = (String) token.get("aead");
@@ -215,7 +218,7 @@ public class OathHOTPLoginModule implements LoginModule {
         try {
             String loginName = (String) sharedState.get(LOGIN_NAME);
 
-            DB db = MongoDBFactory.get(mongoHosts, mongoDb, mongoUser, mongoPassword);
+            DB db = MongoDBFactory.get(mongoHosts, mongoDb, mongoUser, mongoPassword, mongoReadPref);
             DBCollection collection = db.getCollection(mongoCollection);
 
             DBObject searchQuery = QueryBuilder.start().or(

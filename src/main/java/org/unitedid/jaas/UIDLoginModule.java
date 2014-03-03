@@ -39,6 +39,7 @@ public class UIDLoginModule implements LoginModule {
     private String mongoCollection = null;
     private String mongoUser = null;
     private String mongoPassword = null;
+    private String mongoReadPref = "primary";
 
     // PBKDF2 iterations and length
     private int pbkdf2Iterations = 0;
@@ -74,6 +75,9 @@ public class UIDLoginModule implements LoginModule {
         mongoCollection = ConfigUtil.getOption(options, "mongoCollection");
         mongoUser = ConfigUtil.getOption(options, "mongoUser");
         mongoPassword = ConfigUtil.getOption(options, "mongoPassword");
+        if (options.get("mongoReadPref") != null) {
+            mongoReadPref = ConfigUtil.getOption(options, "mongoReadPref");
+        }
         pbkdf2Iterations = Integer.parseInt(ConfigUtil.getOption(options, "pbkdf2Iterations"));
         pbkdf2Length = Integer.parseInt(ConfigUtil.getOption(options, "pbkdf2Length"));
         yubiHSMKeyHandle = Integer.parseInt(ConfigUtil.getOption(options, "yubiHSMKeyHandle"));
@@ -89,7 +93,7 @@ public class UIDLoginModule implements LoginModule {
         username = nameCallback.getName().toLowerCase();
 
         // Fetch mongo object from factory
-        DB db = MongoDBFactory.get(mongoHosts, mongoDb, mongoUser, mongoPassword);
+        DB db = MongoDBFactory.get(mongoHosts, mongoDb, mongoUser, mongoPassword, mongoReadPref);
         DBCollection collection = db.getCollection(mongoCollection);
 
         // Query username or email address since we don't know which one was used
@@ -124,7 +128,12 @@ public class UIDLoginModule implements LoginModule {
 
         // Get available tokens and pass them on to the next JAAS module through sharedState
         if (result.containsField("tokens") ) {
-            sharedState.put("tokens", (List<DBObject>) result.get("tokens"));
+            List<Map<String, Object>> tokens = new ArrayList<Map<String, Object>>();
+            // Convert DBObject list to a regular list of Linkedhashmap
+            for (DBObject token : (List<DBObject>) result.get("tokens")) {
+                tokens.add(token.toMap());
+            }
+            sharedState.put("tokens", tokens);
         }
 
         user = new UIDPrincipal(username);
@@ -146,9 +155,7 @@ public class UIDLoginModule implements LoginModule {
                 subject.getPrincipals().add(user);
             }
 
-            if (log.isDebugEnabled()) {
-                log.debug("Authentication has completed successfully");
-            }
+            log.debug("Authentication has completed successfully");
         }
         clearState();
         commitSucceeded = true;
@@ -156,9 +163,8 @@ public class UIDLoginModule implements LoginModule {
     }
 
     public boolean abort() throws LoginException {
-        if (log.isDebugEnabled()) {
-            log.debug("Authentication has not completed successfully");
-        }
+        log.debug("Authentication has not completed successfully");
+
         if (!succeeded) {
             return false;
         } else if (!commitSucceeded) {
