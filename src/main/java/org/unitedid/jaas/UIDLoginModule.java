@@ -3,10 +3,9 @@ package org.unitedid.jaas;
 import com.mongodb.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.unitedid.auth.client.AuthClient;
+import org.unitedid.auth.client.PasswordFactor;
 import org.unitedid.utils.ConfigUtil;
-import org.unitedid.utils.PasswordUtil;
-import org.unitedid.yhsm.ws.YubiHSMErrorException_Exception;
-import org.unitedid.yhsm.ws.client.YubiHSMValidationClient;
 
 import javax.security.auth.Subject;
 import javax.security.auth.callback.*;
@@ -16,6 +15,7 @@ import javax.security.auth.spi.LoginModule;
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.net.UnknownHostException;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -41,12 +41,7 @@ public class UIDLoginModule implements LoginModule {
     private String mongoPassword = null;
     private String mongoReadPref = "primary";
 
-    // PBKDF2 iterations and length
-    private int pbkdf2Iterations = 0;
-    private int pbkdf2Length = 0;
-
-    private String wsdlValidationURL;
-    private int yubiHSMKeyHandle = 0;
+    private String authBackendURL;
 
     private Subject subject;
     private Map<String, Object> sharedState;
@@ -78,10 +73,7 @@ public class UIDLoginModule implements LoginModule {
         if (options.get("mongoReadPref") != null) {
             mongoReadPref = ConfigUtil.getOption(options, "mongoReadPref");
         }
-        pbkdf2Iterations = Integer.parseInt(ConfigUtil.getOption(options, "pbkdf2Iterations"));
-        pbkdf2Length = Integer.parseInt(ConfigUtil.getOption(options, "pbkdf2Length"));
-        yubiHSMKeyHandle = Integer.parseInt(ConfigUtil.getOption(options, "yubiHSMKeyHandle"));
-        wsdlValidationURL = ConfigUtil.getOption(options, "wsdlValidationURL");
+        authBackendURL = ConfigUtil.getOption(options, "authBackendURL");
     }
 
     public boolean login() throws LoginException {
@@ -96,7 +88,7 @@ public class UIDLoginModule implements LoginModule {
         DB db = MongoDBFactory.get(mongoHosts, mongoDb, mongoUser, mongoPassword, mongoReadPref);
         DBCollection collection = db.getCollection(mongoCollection);
 
-        // Query username or email address since we don't know which one was used
+        // Query username or email address since we don't know which one that was used
         DBObject query = QueryBuilder.start().or(
                 new BasicDBObject("username", username),
                 new BasicDBObject("mail", username),
@@ -109,37 +101,41 @@ public class UIDLoginModule implements LoginModule {
             throw new FailedLoginException("User not activated: " + username);
         }
 
-        String aead = (String) result.get("password");
-        String nonce = (String) result.get("nonce");
-        String salt = (String) result.get("salt");
-        String hashedPassword = PasswordUtil.getHashFromPassword(pass.toString(), salt, pbkdf2Iterations, pbkdf2Length);
-        pass.clearPassword();
+        BasicDBObject credential = (BasicDBObject) result.get("credential");
+        String credentialId = credential.getString("credentialId");
+        String salt = credential.getString("salt");
 
         try {
-            YubiHSMValidationClient hsm = new YubiHSMValidationClient(wsdlValidationURL);
-            if(!hsm.validateAEAD(nonce, yubiHSMKeyHandle, aead, hashedPassword)) {
-                throw new FailedLoginException("AEAD validation failed for user: " + username);
+            PasswordFactor factor = new PasswordFactor(pass.toString(), credentialId, salt);
+            pass.clearPassword();
+            AuthClient authClient = new AuthClient(authBackendURL);
+
+            if (authClient.authenticate(result.get("_id").toString(), factor)) {
+                // Get available tokens and pass them on to the next JAAS module through sharedState
+                if (result.containsField("tokens") ) {
+                    List<Map<String, Object>> tokens = new ArrayList<Map<String, Object>>();
+                    // Convert DBObject list to a regular list of Linkedhashmap
+                    for (DBObject token : (List<DBObject>) result.get("tokens")) {
+                        tokens.add(token.toMap());
+                    }
+                    sharedState.put("tokens", tokens);
+                }
+
+                user = new UIDPrincipal(username);
+                sharedState.put(LOGIN_NAME, username);
+                sharedState.put("userId", result.get("_id").toString());
+                succeeded = true;
+
+                return succeeded;
             }
-        } catch (YubiHSMErrorException_Exception e) {
-            throw new RuntimeException(e);
+
         } catch (UnsupportedEncodingException e) {
             throw new RuntimeException(e);
+        } catch (NoSuchAlgorithmException e) {
+            throw new RuntimeException(e);
         }
 
-        // Get available tokens and pass them on to the next JAAS module through sharedState
-        if (result.containsField("tokens") ) {
-            List<Map<String, Object>> tokens = new ArrayList<Map<String, Object>>();
-            // Convert DBObject list to a regular list of Linkedhashmap
-            for (DBObject token : (List<DBObject>) result.get("tokens")) {
-                tokens.add(token.toMap());
-            }
-            sharedState.put("tokens", tokens);
-        }
-
-        user = new UIDPrincipal(username);
-        sharedState.put(LOGIN_NAME, username);
-        succeeded = true;
-        return true;
+        throw new FailedLoginException("Password authentication failed");
     }
 
     public boolean commit() throws LoginException {

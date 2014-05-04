@@ -3,12 +3,12 @@ package org.unitedid.jaas;
 import java.io.Serializable;
 import java.security.Principal;
 
-public class OathHOTPPrincipal implements Principal, Serializable {
+public class TokenPrincipal implements Principal, Serializable {
 
-    private static final long serialVersionUID = 2178212116129504084L;
+    private static final long serialVersionUID = 1001701204144522222L;
     private String name;
 
-    public OathHOTPPrincipal(String name) {
+    public TokenPrincipal(String name) {
         super();
         this.name = name;
     }

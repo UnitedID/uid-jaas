@@ -1,12 +1,10 @@
 package org.unitedid.jaas;
 
-import com.mongodb.*;
-import com.yubico.jaas.MultiValuePasswordCallback;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.unitedid.auth.client.AuthClient;
+import org.unitedid.auth.client.OATHFactor;
 import org.unitedid.utils.ConfigUtil;
-import org.unitedid.yhsm.ws.YubiHSMErrorException_Exception;
-import org.unitedid.yhsm.ws.client.YubiHSMValidationClient;
 
 import javax.security.auth.Subject;
 import javax.security.auth.callback.Callback;
@@ -17,14 +15,11 @@ import javax.security.auth.login.FailedLoginException;
 import javax.security.auth.login.LoginException;
 import javax.security.auth.spi.LoginModule;
 import java.io.IOException;
-import java.net.UnknownHostException;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
-public class OathHOTPLoginModule implements LoginModule {
+public class TokenLoginModule implements LoginModule {
 
-    private final Logger log = LoggerFactory.getLogger(OathHOTPLoginModule.class);
+    private final Logger log = LoggerFactory.getLogger(TokenLoginModule.class);
 
     /* Constant for login name stored in shared state. */
     public static final String LOGIN_NAME = "javax.security.auth.login.name";
@@ -33,62 +28,31 @@ public class OathHOTPLoginModule implements LoginModule {
     private Subject subject;
     private Map<String, Object> sharedState;
     private CallbackHandler callbackHandler;
-
-    private List<OathHOTPPrincipal> principals = new ArrayList<OathHOTPPrincipal>();
+    private List<TokenPrincipal> principals = new ArrayList<TokenPrincipal>();
 
     /* Configuration options */
-    private String wsdlValidationURL;
-    private int yubiHSMKeyHandle = 0;
-    private boolean softFail = true;
-    private int lookAhead = 1;
-
-    /* Mongo DB related */
-    private List<ServerAddress> mongoHosts = new ArrayList<ServerAddress>();
-    private String mongoDb = null;
-    private String mongoCollection = null;
-    private String mongoUser = null;
-    private String mongoPassword = null;
-    private String mongoReadPref = "primary";
+    private String authBackendURL;
+    private Boolean softFail;
 
 
+    @Override
     public void initialize(Subject subject, CallbackHandler callbackHandler, Map<String, ?> sharedState, Map<String, ?> options) {
-        log.debug("Initializing OathHOTPLoginModule");
+        log.debug("Initializing TokenLoginModule");
 
         this.subject = subject;
         this.sharedState = (Map<String, Object>) sharedState;
         this.callbackHandler = callbackHandler;
 
-        wsdlValidationURL = ConfigUtil.getOption(options, "wsdlValidationURL");
-        yubiHSMKeyHandle = Integer.parseInt(ConfigUtil.getOption(options, "yubiHSMKeyHandle"));
-
-        if (options.get("lookAhead") != null) {
-            lookAhead = Integer.parseInt(ConfigUtil.getOption(options, "lookAhead"));
-        }
-
         if (options.get("softFail") != null) {
             softFail = Boolean.parseBoolean(ConfigUtil.getOption(options, "softFail"));
         }
 
-        String mongoHosts = ConfigUtil.getOption(options, "mongoHosts");
-        for (String host : mongoHosts.split(",")) {
-            try {
-                this.mongoHosts.add(new ServerAddress(host));
-            } catch (UnknownHostException e) {
-                throw new RuntimeException(e);
-            }
-        }
-
-        mongoDb = ConfigUtil.getOption(options, "mongoDb");
-        mongoCollection = ConfigUtil.getOption(options, "mongoCollection");
-        mongoUser = ConfigUtil.getOption(options, "mongoUser");
-        mongoPassword = ConfigUtil.getOption(options, "mongoPassword");
-        if (options.get("mongoReadPref") != null) {
-            mongoReadPref = ConfigUtil.getOption(options, "mongoReadPref");
-        }
+        authBackendURL = ConfigUtil.getOption(options, "authBackendURL");
     }
 
+    @Override
     public boolean login() throws LoginException {
-        log.debug("Begin OATH-HOTP login");
+        log.debug("Begin token login");
 
         NameCallback nameCallback = new NameCallback("Enter username: ");
 
@@ -102,36 +66,39 @@ public class OathHOTPLoginModule implements LoginModule {
                 log.debug("No OTPs found and soft-fail is enabled. JAAS will now ignore this LoginModule.");
                 return false;
             }
-            throw new FailedLoginException("OATH-HOTP authentication failed, no OTPs available");
+            throw new FailedLoginException("Token authentication failed, no OTPs available");
         }
 
         if (validateOtps(otps, nameCallback)) {
             return true;
         }
 
-        throw new FailedLoginException("OATH-HOTP authentication failed");
+        throw new FailedLoginException("Token (2FA) authentication failed");
     }
 
+    @Override
     public boolean commit() throws LoginException {
         log.trace("In commit()");
-        for (OathHOTPPrincipal principal : principals) {
+        for (TokenPrincipal principal : principals) {
             log.debug("Adding principal {}", principal);
             subject.getPrincipals().add(principal);
         }
         return true;
     }
 
+    @Override
     public boolean abort() throws LoginException {
         log.trace("In abort()");
-        for (OathHOTPPrincipal principal : principals) {
+        for (TokenPrincipal principal : principals) {
             subject.getPrincipals().remove(principal);
         }
         return true;
     }
 
+    @Override
     public boolean logout() throws LoginException {
         log.trace("In logout()");
-        for (OathHOTPPrincipal principal : principals) {
+        for (TokenPrincipal principal : principals) {
             subject.getPrincipals().remove(principal);
         }
         return false;
@@ -173,8 +140,8 @@ public class OathHOTPLoginModule implements LoginModule {
 
             if (tokens.size() > 0) {
                 for (String otp : otps) {
-                    if (validateOathHOTP(tokens, otp)) {
-                        principals.add(new OathHOTPPrincipal(nameCallback.getName()));
+                    if (validateTokens(tokens, otp)) {
+                        principals.add(new TokenPrincipal(nameCallback.getName()));
                         validated = true;
                     }
                 }
@@ -188,48 +155,30 @@ public class OathHOTPLoginModule implements LoginModule {
         return validated;
     }
 
-    private boolean validateOathHOTP(List<Map<String, Object>> tokens, String otp) {
+    /***
+     * Check otp against the authentication backend, if at least one token authenticate successfully we return true,
+     * otherwise false.
+     *
+     * @param tokens
+     * @param otp
+     * @return
+     */
+    private boolean validateTokens(List<Map<String, Object>> tokens, String otp) {
+        AuthClient authClient = new AuthClient(authBackendURL);
+
         for (Map<String, Object> token : tokens) {
-            if ((token.get("type").equals("oathhotp") || token.get("type").equals("googlehotp")) && token.get("active").equals(true)) {
-                int newCounter;
-                String tokenId = (String) token.get("tokId");
-                String nonce = (String) token.get("nonce");
-                String aead = (String) token.get("aead");
-                int counter = (Integer) token.get("counter");
+            String type = token.get("type").toString();
+            if (type.equals("oathhotp") || type.equals("oathtotp")) {
+                String nonce = token.get("nonce").toString();
+                String credentialId = token.get("credentialId").toString();
+                OATHFactor factor = new OATHFactor(type, nonce, otp, credentialId);
 
-                YubiHSMValidationClient hsm = new YubiHSMValidationClient(wsdlValidationURL);
-                try {
-                    newCounter = hsm.validateOathHOTP(nonce, yubiHSMKeyHandle, aead, counter, otp, lookAhead);
-                } catch (YubiHSMErrorException_Exception e) {
-                    throw new RuntimeException(e);
-                }
-
-                if (newCounter != 0) {
-                    updateTokenCounter(tokenId, newCounter);
+                if(authClient.authenticate(sharedState.get("userId").toString(), factor)) {
                     return true;
                 }
             }
         }
 
         return false;
-    }
-
-    private void updateTokenCounter(String tokenId, int counter) {
-        try {
-            String loginName = (String) sharedState.get(LOGIN_NAME);
-
-            DB db = MongoDBFactory.get(mongoHosts, mongoDb, mongoUser, mongoPassword, mongoReadPref);
-            DBCollection collection = db.getCollection(mongoCollection);
-
-            DBObject searchQuery = QueryBuilder.start().or(
-                    new BasicDBObject("username", loginName),
-                    new BasicDBObject("mail", loginName)).and("tokens.tokId").is(tokenId).get();
-
-            BasicDBObject set = new BasicDBObject();
-            set.put("$set", new BasicDBObject("tokens.$.counter", counter));
-            collection.update(searchQuery, set);
-        } catch(Exception e)  {
-            throw new RuntimeException(e);
-        }
     }
 }
