@@ -116,12 +116,14 @@ public class TokenLoginModule implements LoginModule {
             callbackHandler.handle(new Callback[] {nameCallback, mvPasswordCallback});
             for (char[] c : mvPasswordCallback.getSecrets()) {
                 String otp = new String(c);
-                if (otp.length() < 6 && otp.length() > 8) {
-                    log.debug("Skipping OTP, not a valid OATH-HOTP (expected length 6-8, but got {})", otp.length());
-                } else if (!otp.matches("^[0-9]+$")) {
-                    log.debug("Skipping OTP, not a valid OATH-HOTP (non digits not allowed)");
-                } else {
+
+                // lets try to do an otp sanity check, we know the otp types of the tokens we support
+                if (otp.matches("^[0-9]+$") && otp.length() >= 6 && otp.length() <= 8) { // OATH
                     result.add(otp);
+                } else if (otp.length() >= 32) { // Yubikey
+                    result.add(otp);
+                } else {
+                    log.debug("Skipping OTP, not matching any known OTP criteria.");
                 }
             }
         } catch (UnsupportedCallbackException e) {
