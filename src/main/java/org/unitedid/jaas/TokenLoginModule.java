@@ -3,7 +3,8 @@ package org.unitedid.jaas;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.unitedid.auth.client.AuthClient;
-import org.unitedid.auth.client.OATHFactor;
+import org.unitedid.auth.client.factors.OATHFactor;
+import org.unitedid.auth.client.factors.YubiKeyFactor;
 import org.unitedid.utils.ConfigUtil;
 
 import javax.security.auth.Subject;
@@ -32,6 +33,8 @@ public class TokenLoginModule implements LoginModule {
 
     /* Configuration options */
     private String authBackendURL;
+    private String authUsername;
+    private String authPassword;
     private Boolean softFail;
 
 
@@ -48,6 +51,8 @@ public class TokenLoginModule implements LoginModule {
         }
 
         authBackendURL = ConfigUtil.getOption(options, "authBackendURL");
+        authUsername = ConfigUtil.getOption(options, "authUsername");
+        authPassword = ConfigUtil.getOption(options, "authPassword");
     }
 
     @Override
@@ -164,16 +169,28 @@ public class TokenLoginModule implements LoginModule {
      * @return
      */
     private boolean validateTokens(List<Map<String, Object>> tokens, String otp) {
-        AuthClient authClient = new AuthClient(authBackendURL);
+        AuthClient authClient = new AuthClient(authBackendURL, authUsername, authPassword);
 
         for (Map<String, Object> token : tokens) {
+            if (!(Boolean) token.get("active")) {
+                continue;
+            }
+
             String type = token.get("type").toString();
             if (type.equals("oathhotp") || type.equals("oathtotp")) {
                 String nonce = token.get("nonce").toString();
                 String credentialId = token.get("credentialId").toString();
                 OATHFactor factor = new OATHFactor(type, nonce, otp, credentialId);
 
-                if(authClient.authenticate(sharedState.get("userId").toString(), factor)) {
+                if (authClient.authenticate(sharedState.get("userId").toString(), factor)) {
+                    return true;
+                }
+            } else if (type.equals("yubikey")) {
+                String nonce = token.get("nonce").toString();
+                String credentialId = token.get("credentialId").toString();
+                YubiKeyFactor factor = new YubiKeyFactor(type, nonce, otp, credentialId);
+
+                if (authClient.authenticate(sharedState.get("userId").toString(), factor)) {
                     return true;
                 }
             }

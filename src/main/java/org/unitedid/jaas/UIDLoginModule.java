@@ -4,7 +4,7 @@ import com.mongodb.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.unitedid.auth.client.AuthClient;
-import org.unitedid.auth.client.PasswordFactor;
+import org.unitedid.auth.client.factors.PasswordFactor;
 import org.unitedid.utils.ConfigUtil;
 
 import javax.security.auth.Subject;
@@ -42,6 +42,8 @@ public class UIDLoginModule implements LoginModule {
     private String mongoReadPref = "primary";
 
     private String authBackendURL;
+    private String authUsername;
+    private String authPassword;
 
     private Subject subject;
     private Map<String, Object> sharedState;
@@ -74,6 +76,8 @@ public class UIDLoginModule implements LoginModule {
             mongoReadPref = ConfigUtil.getOption(options, "mongoReadPref");
         }
         authBackendURL = ConfigUtil.getOption(options, "authBackendURL");
+        authUsername = ConfigUtil.getOption(options, "authUsername");
+        authPassword = ConfigUtil.getOption(options, "authPassword");
     }
 
     public boolean login() throws LoginException {
@@ -108,7 +112,7 @@ public class UIDLoginModule implements LoginModule {
         try {
             PasswordFactor factor = new PasswordFactor(pass.toString(), credentialId, salt);
             pass.clearPassword();
-            AuthClient authClient = new AuthClient(authBackendURL);
+            AuthClient authClient = new AuthClient(authBackendURL, authUsername, authPassword);
 
             if (authClient.authenticate(result.get("_id").toString(), factor)) {
                 // Get available tokens and pass them on to the next JAAS module through sharedState

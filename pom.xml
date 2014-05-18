@@ -50,7 +50,7 @@
         <dependency>
             <groupId>org.unitedid.auth.client</groupId>
             <artifactId>uid-auth-client</artifactId>
-            <version>0.2-SNAPSHOT</version>
+            <version>0.3-SNAPSHOT</version>
         </dependency>
     </dependencies>
 
